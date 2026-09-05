@@ -11,7 +11,6 @@ use std::os::raw::c_void;
 use std::{ffi::CString, sync::Mutex};
 
 // TODO: try to make this program only using safe rust.
-
 const WINDOW_WIDTH: i32 = 400;
 const WINDOW_HEIGHT: i32 = 300;
 
@@ -20,7 +19,7 @@ const VOLUME_CHANGE_BY: f32 = 0.05;
 const INITIAL_VOLUME: f32 = 0.5;
 const SEEK_BY: f32 = 5.0;
 
-const GLOBAL_FRAME_COUNT: usize = 1024;
+const GLOBAL_FRAME_COUNT: usize = 512;
 static GLOBAL_FRAMES: Mutex<[f32; GLOBAL_FRAME_COUNT]> = Mutex::new([0.0; GLOBAL_FRAME_COUNT]);
 
 fn main() {
@@ -140,8 +139,11 @@ fn handle_keyboard(music: raylib::prelude::ffi::Music, current_key: i32, volume:
 }
 
 unsafe extern "C" fn audio_callback(buffer: *mut c_void, frames: u32) {
-    let sample_count = ((frames as usize) * 2).min(GLOBAL_FRAME_COUNT);
+    let sample_count = ((frames as usize) * 2).min(GLOBAL_FRAME_COUNT * 2);
     let samples =
         unsafe { std::slice::from_raw_parts(buffer as *const f32, sample_count as usize) };
-    GLOBAL_FRAMES.lock().unwrap()[..sample_count].copy_from_slice(samples);
+    let mut global = GLOBAL_FRAMES.lock().unwrap();
+    for i in 0..frames {
+        global[i as usize] = samples[(i * 2) as usize];
+    }
 }

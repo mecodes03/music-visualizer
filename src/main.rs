@@ -12,8 +12,8 @@ use std::{ffi::CString, sync::Mutex};
 
 // TODO: try to make this program only using safe rust.
 
-const WINDOW_WIDTH: i32 = 1200;
-const WINDOW_HEIGHT: i32 = 800;
+const WINDOW_WIDTH: i32 = 400;
+const WINDOW_HEIGHT: i32 = 300;
 
 const MAX_VOLUME: f32 = 1.0;
 const VOLUME_CHANGE_BY: f32 = 0.05;
@@ -21,10 +21,7 @@ const INITIAL_VOLUME: f32 = 0.5;
 const SEEK_BY: f32 = 5.0;
 
 const GLOBAL_FRAME_COUNT: usize = 1024;
-static GLOBAL_FRAMES: Mutex<[i32; GLOBAL_FRAME_COUNT]> = Mutex::new([0; GLOBAL_FRAME_COUNT]);
-
-const MIN_H: i32 = -2_147_483_648;
-const MAX_H: i32 = -2_147_483_647;
+static GLOBAL_FRAMES: Mutex<[f32; GLOBAL_FRAME_COUNT]> = Mutex::new([0.0; GLOBAL_FRAME_COUNT]);
 
 fn main() {
     let file_name = CString::new("audio.mp3").unwrap();
@@ -65,41 +62,22 @@ fn main() {
 
             let mut i = 0;
             for frame in GLOBAL_FRAMES.lock().unwrap().iter() {
-                let rect: Rectangle = if *frame > 0 {
-                    let f = *frame as f32 / MAX_H as f32;
-                    println!("max");
-                    println!(
-                        "x: {} y:{} w: {} h: {}",
-                        (i as f32) * cell_width,
-                        (h / 2) as f32,
-                        cell_width,
-                        ((h as f32 / 2.0) * f) as f32,
-                    );
-
+                let bar_height = (h as f32 / 2.0) * frame.abs();
+                let rect = if *frame > 0.0 {
                     Rectangle::new(
-                        (i as f32) * cell_width,
-                        (h / 2) as f32,
+                        i as f32 * cell_width,
+                        (h as f32 / 2.0) - bar_height,
                         cell_width,
-                        ((h as f32 / 2.0) * f) as f32,
+                        bar_height,
                     )
                 } else {
-                    let f = *frame as f32 / MIN_H as f32;
-                    println!("min");
-                    println!(
-                        "x: {} y:{} w: {} h: {}",
-                        (i as f32) * cell_width,
-                        (h / 2) as f32,
-                        cell_width,
-                        ((h as f32 / 2.0) * f) as f32,
-                    );
                     Rectangle::new(
-                        (i as f32) * cell_width,
-                        (h / 2) as f32,
+                        i as f32 * cell_width,
+                        h as f32 / 2.0,
                         cell_width,
-                        ((h as f32 / 2.0) * f) as f32,
+                        bar_height,
                     )
                 };
-                println!("draw");
                 DrawRectangleRec(rect, Color::RED);
                 i += 1;
             }
@@ -164,6 +142,6 @@ fn handle_keyboard(music: raylib::prelude::ffi::Music, current_key: i32, volume:
 unsafe extern "C" fn audio_callback(buffer: *mut c_void, frames: u32) {
     let sample_count = ((frames as usize) * 2).min(GLOBAL_FRAME_COUNT);
     let samples =
-        unsafe { std::slice::from_raw_parts(buffer as *const i32, sample_count as usize) };
+        unsafe { std::slice::from_raw_parts(buffer as *const f32, sample_count as usize) };
     GLOBAL_FRAMES.lock().unwrap()[..sample_count].copy_from_slice(samples);
 }

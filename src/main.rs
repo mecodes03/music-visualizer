@@ -12,7 +12,7 @@ use std::os::raw::c_void;
 use std::sync::Mutex;
 
 // constants
-const WINDOW_WIDTH: i32 = 900;
+const WINDOW_WIDTH: i32 = 500;
 const WINDOW_HEIGHT: i32 = 300;
 const MAX_VOLUME: f32 = 1.0;
 const VOLUME_CHANGE_BY: f32 = 0.05;
@@ -87,14 +87,14 @@ fn main() {
                             i as f32 * cell_width,
                             (h as f32 / 2.0) - bar_height,
                             cell_width,
-                            bar_height,
+                            bar_height * 0.1,
                         )
                     } else {
                         Rectangle::new(
                             i as f32 * cell_width,
-                            h as f32 / 2.0,
+                            h as f32 / 2.0 + bar_height,
                             cell_width,
-                            bar_height,
+                            bar_height * 0.05,
                         )
                     };
                     // println!("{:?}", rect);

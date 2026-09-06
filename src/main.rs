@@ -7,20 +7,33 @@ use raylib::ffi::{
     SeekMusicStream, SetMusicVolume, SetTargetFPS, UpdateMusicStream, WindowShouldClose,
 };
 
+use std::ffi::CString;
 use std::os::raw::c_void;
-use std::{ffi::CString, sync::Mutex};
+use std::sync::Mutex;
 
-// TODO: try to make this program only using safe rust.
-const WINDOW_WIDTH: i32 = 400;
+// constants
+const WINDOW_WIDTH: i32 = 900;
 const WINDOW_HEIGHT: i32 = 300;
-
 const MAX_VOLUME: f32 = 1.0;
 const VOLUME_CHANGE_BY: f32 = 0.05;
 const INITIAL_VOLUME: f32 = 0.5;
 const SEEK_BY: f32 = 5.0;
 
-const GLOBAL_FRAME_COUNT: usize = 512;
-static GLOBAL_FRAMES: Mutex<[f32; GLOBAL_FRAME_COUNT]> = Mutex::new([0.0; GLOBAL_FRAME_COUNT]);
+#[derive(Copy, Clone)]
+struct Frame {
+    left: f32,
+    right: f32,
+}
+
+const GLOBAL_FRAME_CAPACITY: usize = 1024;
+static GLOBAL_FRAMES: Mutex<[Frame; GLOBAL_FRAME_CAPACITY]> = Mutex::new(
+    [Frame {
+        left: 0.0,
+        right: 0.0,
+    }; 1024],
+);
+static GLOBAL_FRAME_COUNT: Mutex<u32> = Mutex::new(0);
+static CHANNELS: Mutex<u32> = Mutex::new(1);
 
 fn main() {
     let file_name = CString::new("audio.mp3").unwrap();
@@ -36,6 +49,9 @@ fn main() {
         println!("sampleRate: {}", music.stream.sampleRate);
         println!("sampleSize: {}", music.stream.sampleSize);
         println!("channels: {}", music.stream.channels);
+        println!("Tadow!!!!!!!!!!!!!!!!!!");
+
+        *CHANNELS.lock().unwrap() = music.stream.channels;
 
         PlayMusicStream(music);
 
@@ -46,8 +62,6 @@ fn main() {
 
         let h = GetRenderHeight();
         let w = GetRenderWidth();
-        let cell_width = w as f32 / (GLOBAL_FRAME_COUNT as f32);
-        println!("cell_width: {}", cell_width);
 
         let mut current_key: i32;
         while !WindowShouldClose() {
@@ -59,33 +73,37 @@ fn main() {
             BeginDrawing();
             ClearBackground(Color::BLACK);
 
-            let mut i = 0;
-            for frame in GLOBAL_FRAMES.lock().unwrap().iter() {
-                let bar_height = (h as f32 / 2.0) * frame.abs();
-                let rect = if *frame > 0.0 {
-                    Rectangle::new(
-                        i as f32 * cell_width,
-                        (h as f32 / 2.0) - bar_height,
-                        cell_width,
-                        bar_height,
-                    )
-                } else {
-                    Rectangle::new(
-                        i as f32 * cell_width,
-                        h as f32 / 2.0,
-                        cell_width,
-                        bar_height,
-                    )
-                };
-                DrawRectangleRec(rect, Color::RED);
-                i += 1;
-            }
+            let snapshot = *GLOBAL_FRAMES.lock().unwrap();
+            let frame_count = *GLOBAL_FRAME_COUNT.lock().unwrap();
 
+            if frame_count > 0 {
+                let cell_width = w as f32 / (frame_count as f32);
+
+                for i in 0..frame_count {
+                    let sample_l = snapshot[i as usize].left;
+                    let bar_height = (h as f32 / 2.0) * sample_l.abs();
+                    let rect = if sample_l > 0.0 {
+                        Rectangle::new(
+                            i as f32 * cell_width,
+                            (h as f32 / 2.0) - bar_height,
+                            cell_width,
+                            bar_height,
+                        )
+                    } else {
+                        Rectangle::new(
+                            i as f32 * cell_width,
+                            h as f32 / 2.0,
+                            cell_width,
+                            bar_height,
+                        )
+                    };
+                    // println!("{:?}", rect);
+                    DrawRectangleRec(rect, Color::RED);
+                }
+            }
             EndDrawing();
         }
     };
-
-    println!("Tadow!!!!!!!!!!!!!!!!!!");
 }
 
 fn handle_keyboard(music: raylib::prelude::ffi::Music, current_key: i32, volume: &mut f32) {
@@ -139,11 +157,22 @@ fn handle_keyboard(music: raylib::prelude::ffi::Music, current_key: i32, volume:
 }
 
 unsafe extern "C" fn audio_callback(buffer: *mut c_void, frames: u32) {
-    let sample_count = ((frames as usize) * 2).min(GLOBAL_FRAME_COUNT * 2);
-    let samples =
-        unsafe { std::slice::from_raw_parts(buffer as *const f32, sample_count as usize) };
+    let gf_count = *GLOBAL_FRAME_COUNT.lock().unwrap() as usize;
+    let frame_count = (frames as usize).min(if gf_count > 0 {
+        gf_count
+    } else {
+        frames as usize
+    });
+    let samples = unsafe {
+        std::slice::from_raw_parts(
+            buffer as *const f32,
+            frame_count * (*CHANNELS.lock().unwrap() as usize),
+        )
+    };
     let mut global = GLOBAL_FRAMES.lock().unwrap();
-    for i in 0..frames {
-        global[i as usize] = samples[(i * 2) as usize];
+    for i in 0..frame_count {
+        global[i as usize].left = samples[2 * i];
+        global[i as usize].right = samples[2 * i + 1]
     }
+    *GLOBAL_FRAME_COUNT.lock().unwrap() = frame_count as u32;
 }

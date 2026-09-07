@@ -7,6 +7,8 @@ use raylib::ffi::{
     SeekMusicStream, SetMusicVolume, SetTargetFPS, UpdateMusicStream, WindowShouldClose,
 };
 
+mod fourier_transform;
+
 use std::ffi::CString;
 use std::os::raw::c_void;
 use std::sync::Mutex;
@@ -87,14 +89,14 @@ fn main() {
                             i as f32 * cell_width,
                             (h as f32 / 2.0) - bar_height,
                             cell_width,
-                            bar_height * 0.1,
+                            bar_height,
                         )
                     } else {
                         Rectangle::new(
                             i as f32 * cell_width,
-                            h as f32 / 2.0 + bar_height,
+                            h as f32 / 2.0,
                             cell_width,
-                            bar_height * 0.05,
+                            bar_height,
                         )
                     };
                     // println!("{:?}", rect);

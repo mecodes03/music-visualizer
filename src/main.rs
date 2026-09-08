@@ -1,3 +1,4 @@
+use num::complex::Complex32;
 use raylib::ffi::{
     AttachAudioStreamProcessor, BeginDrawing, ClearBackground, Color, DrawRectangleRec, EndDrawing,
     GetKeyPressed, GetMusicTimeLength, GetMusicTimePlayed, GetRenderHeight, GetRenderWidth,
@@ -32,13 +33,14 @@ static GLOBAL_FRAMES: Mutex<[Frame; GLOBAL_FRAME_CAPACITY]> = Mutex::new(
     [Frame {
         left: 0.0,
         right: 0.0,
-    }; 1024],
+    }; GLOBAL_FRAME_CAPACITY],
 );
 static GLOBAL_FRAME_COUNT: Mutex<u32> = Mutex::new(0);
 static CHANNELS: Mutex<u32> = Mutex::new(1);
 
 fn main() {
     let file_name = CString::new("audio.mp3").unwrap();
+    println!("file_name: {:p}", file_name.as_ptr());
 
     unsafe {
         let title = CString::new("Musializer").unwrap();
@@ -78,11 +80,14 @@ fn main() {
             let snapshot = *GLOBAL_FRAMES.lock().unwrap();
             let frame_count = *GLOBAL_FRAME_COUNT.lock().unwrap();
 
+            let samples: Vec<Complex32> =
+                snapshot.iter().map(|x| Complex32::from(x.left)).collect();
+
+            let _out = fourier_transform::fft(&samples);
             if frame_count > 0 {
                 let cell_width = w as f32 / (frame_count as f32);
-
                 for i in 0..frame_count {
-                    let sample_l = snapshot[i as usize].left;
+                    let sample_l = _out[i as usize];
                     let bar_height = (h as f32 / 2.0) * sample_l.abs();
                     let rect = if sample_l > 0.0 {
                         Rectangle::new(
@@ -99,7 +104,6 @@ fn main() {
                             bar_height,
                         )
                     };
-                    // println!("{:?}", rect);
                     DrawRectangleRec(rect, Color::RED);
                 }
             }
@@ -176,5 +180,6 @@ unsafe extern "C" fn audio_callback(buffer: *mut c_void, frames: u32) {
         global[i as usize].left = samples[2 * i];
         global[i as usize].right = samples[2 * i + 1]
     }
+    println!("frame_count: {}", frame_count);
     *GLOBAL_FRAME_COUNT.lock().unwrap() = frame_count as u32;
 }

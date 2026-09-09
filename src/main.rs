@@ -180,6 +180,5 @@ unsafe extern "C" fn audio_callback(buffer: *mut c_void, frames: u32) {
         global[i as usize].left = samples[2 * i];
         global[i as usize].right = samples[2 * i + 1]
     }
-    println!("frame_count: {}", frame_count);
     *GLOBAL_FRAME_COUNT.lock().unwrap() = frame_count as u32;
 }

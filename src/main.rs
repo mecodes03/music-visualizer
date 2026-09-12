@@ -1,184 +1,76 @@
 use num::complex::Complex32;
-use raylib::ffi::{
-    AttachAudioStreamProcessor, BeginDrawing, ClearBackground, Color, DrawRectangleRec, EndDrawing,
-    GetKeyPressed, GetMusicTimeLength, GetMusicTimePlayed, GetRenderHeight, GetRenderWidth,
-    InitAudioDevice, InitWindow, IsMusicStreamPlaying,
-    KeyboardKey::{self},
-    LoadMusicStream, PauseMusicStream, PlayMusicStream, Rectangle, ResumeMusicStream,
-    SeekMusicStream, SetMusicVolume, SetTargetFPS, UpdateMusicStream, WindowShouldClose,
-};
+use raylib::prelude::*;
+use std::sync::Mutex;
 
 mod fourier_transform;
 
-use std::ffi::CString;
-use std::os::raw::c_void;
-use std::sync::Mutex;
+// TODO: use array everywhere instead of vec since most lengts(kinda estimated) are known at compile time.
 
-// constants
-const WINDOW_WIDTH: i32 = 500;
-const WINDOW_HEIGHT: i32 = 300;
-const MAX_VOLUME: f32 = 1.0;
-const VOLUME_CHANGE_BY: f32 = 0.05;
-const INITIAL_VOLUME: f32 = 0.5;
-const SEEK_BY: f32 = 5.0;
+static FREQUENCY_COUNT: Mutex<usize> = Mutex::new(0);
+static CAPACITY: usize = 1024;
+/** samples in one Frame of 60 FPS*/
+static CURRENT_FRAME_FREQUENCIES: Mutex<[f32; CAPACITY]> = Mutex::new([0.0; CAPACITY]);
 
-#[derive(Copy, Clone)]
-struct Frame {
-    left: f32,
-    right: f32,
-}
-
-const GLOBAL_FRAME_CAPACITY: usize = 1024;
-static GLOBAL_FRAMES: Mutex<[Frame; GLOBAL_FRAME_CAPACITY]> = Mutex::new(
-    [Frame {
-        left: 0.0,
-        right: 0.0,
-    }; GLOBAL_FRAME_CAPACITY],
-);
-static GLOBAL_FRAME_COUNT: Mutex<u32> = Mutex::new(0);
-static CHANNELS: Mutex<u32> = Mutex::new(1);
-
+/** Programme using safe raylib rust bindings. */
 fn main() {
-    let file_name = CString::new("audio.mp3").unwrap();
-    println!("file_name: {:p}", file_name.as_ptr());
+    const WIDTH: i32 = 640;
+    const HEIGHT: i32 = 480;
 
-    unsafe {
-        let title = CString::new("Musializer").unwrap();
-        InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, title.as_ptr());
-        SetTargetFPS(60);
+    let (mut rl, thread) = raylib::init()
+        .size(WIDTH, HEIGHT)
+        .title("Musializer")
+        .build();
+    rl.set_target_fps(60);
 
-        InitAudioDevice();
+    let raylib_audio_device = RaylibAudio::init_audio_device().expect("audio init failed");
+    let music = raylib_audio_device
+        .new_music("audio.mp3")
+        .expect("sound load failed");
+    music.play_stream();
 
-        let music = LoadMusicStream(file_name.as_ptr());
-        println!("sampleRate: {}", music.stream.sampleRate);
-        println!("sampleSize: {}", music.stream.sampleSize);
-        println!("channels: {}", music.stream.channels);
-        println!("Tadow!!!!!!!!!!!!!!!!!!");
+    let mut audio_stream_processor = move |_samples: &mut [f32], _channels: u32| {
+        let samples: Vec<Complex32> = Vec::from(_samples)
+            .iter()
+            .step_by(2)
+            .map(|&n| Complex32::from(n))
+            .collect();
 
-        *CHANNELS.lock().unwrap() = music.stream.channels;
+        let fft = fourier_transform::fft(&samples);
+        let mut global_frequencies = CURRENT_FRAME_FREQUENCIES.lock().unwrap();
 
-        PlayMusicStream(music);
-
-        let mut volume: f32 = INITIAL_VOLUME;
-        SetMusicVolume(music, volume);
-
-        AttachAudioStreamProcessor(music.stream, Some(audio_callback));
-
-        let h = GetRenderHeight();
-        let w = GetRenderWidth();
-
-        let mut current_key: i32;
-        while !WindowShouldClose() {
-            UpdateMusicStream(music);
-
-            current_key = GetKeyPressed();
-            handle_keyboard(music, current_key, &mut volume);
-
-            BeginDrawing();
-            ClearBackground(Color::BLACK);
-
-            let snapshot = *GLOBAL_FRAMES.lock().unwrap();
-            let frame_count = *GLOBAL_FRAME_COUNT.lock().unwrap();
-
-            let samples: Vec<Complex32> =
-                snapshot.iter().map(|x| Complex32::from(x.left)).collect();
-
-            let _out = fourier_transform::fft(&samples);
-            if frame_count > 0 {
-                let cell_width = w as f32 / (frame_count as f32);
-                for i in 0..frame_count {
-                    let sample_l = _out[i as usize];
-                    let bar_height = (h as f32 / 2.0) * sample_l.abs();
-                    let rect = if sample_l > 0.0 {
-                        Rectangle::new(
-                            i as f32 * cell_width,
-                            (h as f32 / 2.0) - bar_height,
-                            cell_width,
-                            bar_height,
-                        )
-                    } else {
-                        Rectangle::new(
-                            i as f32 * cell_width,
-                            h as f32 / 2.0,
-                            cell_width,
-                            bar_height,
-                        )
-                    };
-                    DrawRectangleRec(rect, Color::RED);
-                }
-            }
-            EndDrawing();
+        let len = fft.len();
+        for f in 0..len {
+            global_frequencies[f] = fft[f];
         }
+
+        *FREQUENCY_COUNT.lock().unwrap() = len;
     };
-}
 
-fn handle_keyboard(music: raylib::prelude::ffi::Music, current_key: i32, volume: &mut f32) {
-    match current_key {
-        key if key == KeyboardKey::KEY_H as i32 => {
-            let current_time_played = unsafe { GetMusicTimePlayed(music) };
-            let seek = if current_time_played <= SEEK_BY {
-                0.0
-            } else {
-                current_time_played - SEEK_BY
-            };
-            unsafe { SeekMusicStream(music, seek) };
-        }
+    let _guard = attach_audio_stream_processor_to_music(&music, &mut audio_stream_processor);
 
-        key if key == KeyboardKey::KEY_L as i32 => {
-            let current_time_played = unsafe { GetMusicTimePlayed(music) };
-            let music_length = unsafe { GetMusicTimeLength(music) };
-            let seek = if current_time_played + SEEK_BY > music_length {
-                music_length
-            } else {
-                current_time_played + SEEK_BY
-            };
-            unsafe { SeekMusicStream(music, seek) };
-        }
+    while !rl.window_should_close() {
+        let mut d = rl.begin_drawing(&thread);
+        d.clear_background(Color::BLACK);
 
-        key if key == KeyboardKey::KEY_SPACE as i32 => {
-            if unsafe { IsMusicStreamPlaying(music) } {
-                unsafe { PauseMusicStream(music) };
-            } else {
-                unsafe { ResumeMusicStream(music) };
+        let frequency_count = *FREQUENCY_COUNT.lock().unwrap();
+        if frequency_count > 0 {
+            let frequencies = *CURRENT_FRAME_FREQUENCIES.lock().unwrap();
+
+            let cell_width = WIDTH as f32 / frequency_count as f32;
+            let cell_height = HEIGHT as f32 / frequency_count as f32;
+
+            for f in 0..frequency_count {
+                let bar_height = frequencies[f] * cell_height;
+                let rect = Rectangle::new(
+                    f as f32 * cell_width,
+                    HEIGHT as f32 / 2.0 - bar_height,
+                    cell_width,
+                    bar_height,
+                );
+                d.draw_rectangle_rec(rect, color::Color::WHITE);
             }
         }
 
-        key if key == KeyboardKey::KEY_DOWN as i32 => {
-            println!("volume down");
-            *volume = if *volume < 0.1 { 0.0 } else { *volume - 0.1 };
-            unsafe { SetMusicVolume(music, *volume) };
-        }
-
-        key if key == KeyboardKey::KEY_UP as i32 => {
-            println!("volume up");
-            *volume = if *volume < 0.9 {
-                *volume + VOLUME_CHANGE_BY
-            } else {
-                MAX_VOLUME
-            };
-            unsafe { SetMusicVolume(music, *volume) };
-        }
-        _ => {}
+        music.update_stream();
     }
-}
-
-unsafe extern "C" fn audio_callback(buffer: *mut c_void, frames: u32) {
-    let gf_count = *GLOBAL_FRAME_COUNT.lock().unwrap() as usize;
-    let frame_count = (frames as usize).min(if gf_count > 0 {
-        gf_count
-    } else {
-        frames as usize
-    });
-    let samples = unsafe {
-        std::slice::from_raw_parts(
-            buffer as *const f32,
-            frame_count * (*CHANNELS.lock().unwrap() as usize),
-        )
-    };
-    let mut global = GLOBAL_FRAMES.lock().unwrap();
-    for i in 0..frame_count {
-        global[i as usize].left = samples[2 * i];
-        global[i as usize].right = samples[2 * i + 1]
-    }
-    *GLOBAL_FRAME_COUNT.lock().unwrap() = frame_count as u32;
 }

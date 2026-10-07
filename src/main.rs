@@ -7,18 +7,24 @@ mod fourier_transform;
 // TODO: use array everywhere instead of vec since most lengts(kinda estimated) are known at compile time.
 
 const MAX_VOLUME: f32 = 1.0;
+const MIN_VOLUME: f32 = 0.0;
 const VOLUME_CHANGE_BY: f32 = 0.05;
 const INITIAL_VOLUME: f32 = 0.5;
 const SEEK_BY: f32 = 5.0;
-const FPS: u32 = 20;
+const FPS: u32 = 60;
 
-static FREQUENCY_COUNT: Mutex<usize> = Mutex::new(0);
-static SAMPLE_COUNT: Mutex<usize> = Mutex::new(0);
-static CAPACITY: usize = 1024;
+const MAX_FFT_LENGHT: usize = 512;
+const MAX_SAMPLE_CAP: usize = 1024;
+
 /** samples in one Frame of 60 FPS*/
-static CURRENT_SAMPLES: Mutex<[f32; CAPACITY]> = Mutex::new([0.0; CAPACITY]);
+static CURRENT_SAMPLES: Mutex<[f32; MAX_SAMPLE_CAP]> = Mutex::new([0.0; MAX_SAMPLE_CAP]);
+static SAMPLE_COUNT: Mutex<usize> = Mutex::new(0);
+
 /** frequency of samples in one Frame of 60 FPS*/
-static CURRENT_FRAME_FREQUENCIES: Mutex<[f32; CAPACITY]> = Mutex::new([0.0; CAPACITY]);
+static CURRENT_FRAME_FREQUENCIES: Mutex<[f32; MAX_FFT_LENGHT]> = Mutex::new([0.0; MAX_FFT_LENGHT]);
+static FREQUENCY_COUNT: Mutex<usize> = Mutex::new(0);
+
+static MAX_AMP: Mutex<f32> = Mutex::new(0.0);
 
 #[derive(Copy, Clone)]
 enum DisplayType {
@@ -29,8 +35,8 @@ enum DisplayType {
 static DISPLAY_TYPE: Mutex<DisplayType> = Mutex::new(DisplayType::Samples);
 /** Programme using safe raylib rust bindings. */
 fn main() {
-    const WIDTH: i32 = 640;
-    const HEIGHT: i32 = 480;
+    const WIDTH: i32 = 800;
+    const HEIGHT: i32 = 600;
 
     let (mut rl, thread) = raylib::init()
         .size(WIDTH, HEIGHT)
@@ -40,44 +46,47 @@ fn main() {
 
     let raylib_audio_device = RaylibAudio::init_audio_device().expect("audio init failed");
     let music = raylib_audio_device
-        .new_music("assets/audio.mp3")
+        .new_music("assets/song3.mp3")
         .expect("sound load failed");
     music.play_stream();
 
-    let mut audio_stream_processor = |_samples: &mut [f32], _channels: u32| {
-        let samples: Vec<Complex32> = Vec::from(&*_samples)
-            .iter()
-            .step_by(2)
-            .map(|&n| Complex32::from(n))
-            .collect();
-
-        match *DISPLAY_TYPE.lock().unwrap() {
+    let mut audio_stream_processor =
+        |_samples: &mut [f32], _channels: u32| match *DISPLAY_TYPE.lock().unwrap() {
             DisplayType::Samples => {
-                let mut len = _samples.len();
-                if _samples.len() > CAPACITY {
-                    len = CAPACITY
+                // only take left samples (mono basically)
+                let mut len = _samples.len() / 2;
+                if len > MAX_SAMPLE_CAP {
+                    len = MAX_SAMPLE_CAP
                 }
+                let mut global_samples = CURRENT_SAMPLES.lock().unwrap();
                 for f in 0..len {
-                    let mut global_samples = CURRENT_SAMPLES.lock().unwrap();
-                    global_samples[f] = _samples[f];
+                    global_samples[f] = _samples[2 * f];
                 }
+
                 *SAMPLE_COUNT.lock().unwrap() = len;
             }
 
             DisplayType::Frequency => {
+                let mono: Vec<f32> = _samples.iter().step_by(2).copied().collect();
+                // TODO: make MAX_FFT_LENGHT mutable so user can choose how many he wants (128, 64, 32, 16)
+                let len = if mono.len() > MAX_FFT_LENGHT {
+                    MAX_FFT_LENGHT
+                } else {
+                    mono.len().next_power_of_two()
+                };
+
+                let mut samples: Vec<Complex32> = mono.iter().map(|x| Complex32::from(x)).collect();
+                samples.resize(len, Complex32::new(0.0, 0.0));
+
                 let fft = fourier_transform::fft(&samples);
-                let mut len = fft.len();
-                if len > CAPACITY {
-                    len = CAPACITY
-                }
+                let mut global_frequencies = CURRENT_FRAME_FREQUENCIES.lock().unwrap();
                 for f in 0..len {
-                    let mut global_frequencies = CURRENT_FRAME_FREQUENCIES.lock().unwrap();
                     global_frequencies[f] = fft[f];
                 }
+
                 *FREQUENCY_COUNT.lock().unwrap() = len;
             }
-        }
-    };
+        };
 
     let _guard = attach_audio_stream_processor_to_music(&music, &mut audio_stream_processor);
 
@@ -91,15 +100,20 @@ fn main() {
 
         match *DISPLAY_TYPE.lock().unwrap() {
             DisplayType::Frequency => {
-                let count = 64;
+                let count = *FREQUENCY_COUNT.lock().unwrap();
                 if count > 0 {
-                    let frequencies = *CURRENT_FRAME_FREQUENCIES.lock().unwrap();
-
                     let cell_width = WIDTH as f32 / count as f32;
-                    let cell_height = HEIGHT as f32 / 256.0 as f32;
+                    let mut max_amp = MAX_AMP.lock().unwrap();
 
+                    let frequencies = *CURRENT_FRAME_FREQUENCIES.lock().unwrap();
                     for f in 0..count {
-                        let bar_height = frequencies[f] * cell_height;
+                        let fr = frequencies[f];
+                        if fr > *max_amp {
+                            *max_amp = fr
+                        };
+
+                        let t = fr / *max_amp;
+                        let bar_height = HEIGHT as f32 / 2.0 * t;
                         let rect = Rectangle::new(
                             f as f32 * cell_width,
                             HEIGHT as f32 / 2.0 - bar_height,
@@ -115,7 +129,6 @@ fn main() {
                 let count = *SAMPLE_COUNT.lock().unwrap();
                 if count > 0 {
                     let samples = *CURRENT_SAMPLES.lock().unwrap();
-                    // println!("_samples: {:?}", samples);
                     let cell_width = WIDTH as f32 / count as f32;
 
                     for f in 0..count {
@@ -178,13 +191,17 @@ fn handle_keyboard(music: &Music<'_>, current_key: Option<KeyboardKey>, volume: 
 
             KeyboardKey::KEY_DOWN => {
                 println!("volume down");
-                *volume = if *volume < 0.1 { 0.0 } else { *volume - 0.1 };
+                *volume = if *volume < VOLUME_CHANGE_BY {
+                    MIN_VOLUME
+                } else {
+                    *volume - VOLUME_CHANGE_BY
+                };
                 music.set_volume(*volume);
             }
 
             KeyboardKey::KEY_UP => {
                 println!("volume up");
-                *volume = if *volume < 0.9 {
+                *volume = if *volume + VOLUME_CHANGE_BY < MAX_VOLUME {
                     *volume + VOLUME_CHANGE_BY
                 } else {
                     MAX_VOLUME

@@ -1,4 +1,4 @@
-use num::complex::Complex32;
+use num::complex::{Complex32, ComplexFloat};
 use std::f32::consts::PI;
 
 /** Descrete Fourier Transform O(n^2)*/
@@ -24,9 +24,13 @@ pub fn dft(samples: &[f32]) -> Vec<f32> {
 }
 
 /** Fast Fourier Transform - O(nlogn) */
-pub fn fft(samples: &Vec<Complex32>) -> Vec<f32> {
+pub fn fft(samples: &[Complex32]) -> Vec<f32> {
     let n = samples.len();
-    assert!(n % 2 == 0, "fft: n must be a power of 2, got {}", n);
+    assert!(
+        n.is_power_of_two(),
+        "fft: n must be a power of 2, got {}",
+        n
+    );
     let out = _fft(&samples);
     out.iter().map(|&x| x.norm()).collect()
 }
